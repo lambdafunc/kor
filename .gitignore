@@ -1,2 +1,11 @@
+.vscode
 *.iml
 .idea/
+dist/**
+main.exe
+coverage.txt
+build/
+kor
+!kor/
+*.swp
+hack/exceptions

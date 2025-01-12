@@ -11,6 +11,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
 func validateServiceBackend(clientset kubernetes.Interface, namespace string, backend *v1.IngressBackend) bool {
@@ -25,8 +28,8 @@ func validateServiceBackend(clientset kubernetes.Interface, namespace string, ba
 	return true
 }
 
-func retrieveUsedIngress(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
-	ingresses, err := clientset.NetworkingV1().Ingresses(namespace).List(context.TODO(), metav1.ListOptions{})
+func retrieveUsedIngress(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]string, error) {
+	ingresses, err := clientset.NetworkingV1().Ingresses(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
 	if err != nil {
 		return nil, err
 	}
@@ -34,18 +37,7 @@ func retrieveUsedIngress(clientset kubernetes.Interface, namespace string, filte
 	usedIngresses := []string{}
 
 	for _, ingress := range ingresses.Items {
-		if ingress.Labels["kor/used"] == "true" {
-			continue
-		}
-
-		// checks if the resource has any labels that match the excluded selector specified in opts.ExcludeLabels.
-		// If it does, the resource is skipped.
-		if excluded, _ := HasExcludedLabel(ingress.Labels, filterOpts.ExcludeLabels); excluded {
-			continue
-		}
-		// checks if the resource's age (measured from its last modified time) matches the included criteria
-		// specified by the filter options.
-		if included, _ := HasIncludedAge(ingress.CreationTimestamp, filterOpts); !included {
+		if pass, _ := filter.SetObject(&ingress).Run(filterOpts); pass {
 			continue
 		}
 
@@ -76,62 +68,87 @@ func retrieveUsedIngress(clientset kubernetes.Interface, namespace string, filte
 	return usedIngresses, nil
 }
 
-func retrieveIngressNames(clientset kubernetes.Interface, namespace string) ([]string, error) {
-	ingresses, err := clientset.NetworkingV1().Ingresses(namespace).List(context.TODO(), metav1.ListOptions{})
+func retrieveIngressNames(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]string, []string, error) {
+	ingresses, err := clientset.NetworkingV1().Ingresses(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	var unusedIngressNames []string
 	names := make([]string, 0, len(ingresses.Items))
+
 	for _, ingress := range ingresses.Items {
+		if pass, _ := filter.SetObject(&ingress).Run(filterOpts); pass {
+			continue
+		}
+
+		if ingress.Labels["kor/used"] == "false" {
+			unusedIngressNames = append(unusedIngressNames, ingress.Name)
+			continue
+		}
 		names = append(names, ingress.Name)
 	}
-	return names, nil
+	return names, unusedIngressNames, nil
 }
 
-func processNamespaceIngresses(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
+func processNamespaceIngresses(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]ResourceInfo, error) {
 	usedIngresses, err := retrieveUsedIngress(clientset, namespace, filterOpts)
 	if err != nil {
 		return nil, err
 	}
-	ingressNames, err := retrieveIngressNames(clientset, namespace)
+	ingressNames, unusedIngressNames, err := retrieveIngressNames(clientset, namespace, filterOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	diff := CalculateResourceDifference(usedIngresses, ingressNames)
+	var diff []ResourceInfo
+
+	for _, name := range CalculateResourceDifference(usedIngresses, ingressNames) {
+		reason := "Ingress does not have a valid backend service"
+		diff = append(diff, ResourceInfo{Name: name, Reason: reason})
+	}
+
+	for _, name := range unusedIngressNames {
+		reason := "Marked with unused label"
+		diff = append(diff, ResourceInfo{Name: name, Reason: reason})
+	}
+
 	return diff, nil
 
 }
 
-func GetUnusedIngresses(includeExcludeLists IncludeExcludeLists, filterOpts *FilterOptions, clientset kubernetes.Interface, outputFormat string, opts Opts) (string, error) {
-	var outputBuffer bytes.Buffer
-	namespaces := SetNamespaceList(includeExcludeLists, clientset)
-	response := make(map[string]map[string][]string)
-
-	for _, namespace := range namespaces {
+func GetUnusedIngresses(filterOpts *filters.Options, clientset kubernetes.Interface, outputFormat string, opts common.Opts) (string, error) {
+	resources := make(map[string]map[string][]ResourceInfo)
+	for _, namespace := range filterOpts.Namespaces(clientset) {
 		diff, err := processNamespaceIngresses(clientset, namespace, filterOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to process namespace %s: %v\n", namespace, err)
 			continue
 		}
-
 		if opts.DeleteFlag {
 			if diff, err = DeleteResource(diff, clientset, namespace, "Ingress", opts.NoInteractive); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to delete Ingress %s in namespace %s: %v\n", diff, namespace, err)
 			}
 		}
-		output := FormatOutput(namespace, diff, "Ingresses")
-		outputBuffer.WriteString(output)
-		outputBuffer.WriteString("\n")
-
-		resourceMap := make(map[string][]string)
-		resourceMap["Ingresses"] = diff
-		response[namespace] = resourceMap
+		switch opts.GroupBy {
+		case "namespace":
+			resources[namespace] = make(map[string][]ResourceInfo)
+			resources[namespace]["Ingress"] = diff
+		case "resource":
+			appendResources(resources, "Ingress", namespace, diff)
+		}
 	}
 
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return "", err
+	var outputBuffer bytes.Buffer
+	var jsonResponse []byte
+	switch outputFormat {
+	case "table":
+		outputBuffer = FormatOutput(resources, opts)
+	case "json", "yaml":
+		var err error
+		if jsonResponse, err = json.MarshalIndent(resources, "", "  "); err != nil {
+			return "", err
+		}
 	}
 
 	unusedIngresses, err := unusedResourceFormatter(outputFormat, outputBuffer, opts, jsonResponse)

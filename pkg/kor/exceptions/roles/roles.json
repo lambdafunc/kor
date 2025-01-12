@@ -1,0 +1,17 @@
+{
+  "exceptionRoles": [
+    {
+      "Namespace": "",
+      "ResourceName": "cloud-provider"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "system:controller:glbc"
+    },
+    {
+      "Namespace": "openshift-.*",
+      "ResourceName": ".*",
+      "MatchRegex": true
+    }
+  ]
+}

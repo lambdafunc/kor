@@ -3,91 +3,190 @@ package kor
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	labels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
-func processNamespacePdbs(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
-	var unusedPdbs []string
-	pdbs, err := clientset.PolicyV1().PodDisruptionBudgets(namespace).List(context.TODO(), metav1.ListOptions{})
+//go:embed exceptions/pdbs/pdbs.json
+var pdbsConfig []byte
+
+func processNamespacePdbs(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]ResourceInfo, error) {
+	var unusedPdbs []ResourceInfo
+	pdbs, err := clientset.PolicyV1().PodDisruptionBudgets(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := unmarshalConfig(pdbsConfig)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, pdb := range pdbs.Items {
-		if pdb.Labels["kor/used"] == "true" {
+		if pass, _ := filter.SetObject(&pdb).Run(filterOpts); pass {
 			continue
 		}
 
-		// checks if the resource has any labels that match the excluded selector specified in opts.ExcludeLabels.
-		// If it does, the resource is skipped.
-		if excluded, _ := HasExcludedLabel(pdb.Labels, filterOpts.ExcludeLabels); excluded {
+		exceptionFound, err := isResourceException(pdb.Name, pdb.Namespace, config.ExceptionPdbs)
+		if err != nil {
+			return nil, err
+		}
+
+		if exceptionFound {
 			continue
 		}
-		// checks if the resource's age (measured from its last modified time) matches the included criteria
-		// specified by the filter options.
-		if included, _ := HasIncludedAge(pdb.CreationTimestamp, filterOpts); !included {
+
+		if pdb.Labels["kor/used"] == "false" {
+			reason := "Marked with unused label"
+			unusedPdbs = append(unusedPdbs, ResourceInfo{Name: pdb.Name, Reason: reason})
 			continue
 		}
 
 		selector := pdb.Spec.Selector
-		if len(selector.MatchLabels) == 0 {
-			unusedPdbs = append(unusedPdbs, pdb.Name)
+		var hasMatchingTemplates, hasMatchingWorkloads bool
+
+		// Validate empty selector
+		if selector == nil || len(selector.MatchLabels) == 0 {
+			hasRunningPods, err := validateRunningPods(clientset, namespace)
+			if err != nil {
+				return nil, err
+			}
+
+			if !hasRunningPods {
+				reason := "Pdb matches every pod (empty selector) but 0 pods run"
+				unusedPdbs = append(unusedPdbs, ResourceInfo{Name: pdb.Name, Reason: reason})
+			}
+
 			continue
+		} else {
+			hasMatchingTemplates, err = validateMatchingTemplates(clientset, namespace, selector)
+			if err != nil {
+				return nil, err
+			}
+
+			hasMatchingWorkloads, err = validateMatchingWorkloads(clientset, namespace, selector)
+			if err != nil {
+				return nil, err
+			}
 		}
-		deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{
-			LabelSelector: metav1.FormatLabelSelector(selector),
-		})
-		if err != nil {
-			return nil, err
-		}
-		statefulSets, err := clientset.AppsV1().StatefulSets(namespace).List(context.TODO(), metav1.ListOptions{
-			LabelSelector: metav1.FormatLabelSelector(selector),
-		})
-		if err != nil {
-			return nil, err
-		}
-		if len(deployments.Items) == 0 && len(statefulSets.Items) == 0 {
-			unusedPdbs = append(unusedPdbs, pdb.Name)
+
+		if !hasMatchingTemplates && !hasMatchingWorkloads {
+			reason := "Pdb is not referencing any deployments, statefulsets or pods"
+			unusedPdbs = append(unusedPdbs, ResourceInfo{Name: pdb.Name, Reason: reason})
 		}
 	}
+
 	return unusedPdbs, nil
 }
 
-func GetUnusedPdbs(includeExcludeLists IncludeExcludeLists, filterOpts *FilterOptions, clientset kubernetes.Interface, outputFormat string, opts Opts) (string, error) {
-	var outputBuffer bytes.Buffer
-	namespaces := SetNamespaceList(includeExcludeLists, clientset)
-	response := make(map[string]map[string][]string)
+func validateRunningPods(clientset kubernetes.Interface, namespace string) (bool, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+		FieldSelector: "status.phase=Running",
+	})
+	if err != nil {
+		return false, err
+	}
 
-	for _, namespace := range namespaces {
+	// Field status.phase=Running can still reference Terminating pods
+	// Return true if at least one pod is running
+	for _, pod := range pods.Items {
+		if pod.ObjectMeta.DeletionTimestamp == nil {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func validateMatchingTemplates(clientset kubernetes.Interface, namespace string, selector *metav1.LabelSelector) (bool, error) {
+	labelSelector, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
+		return false, err
+	}
+
+	deployments, err := clientset.AppsV1().Deployments(namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return false, err
+	}
+
+	for _, deployment := range deployments.Items {
+		deploymentLabels := labels.Set(deployment.Spec.Template.Labels)
+		if labelSelector.Matches(deploymentLabels) {
+			return true, nil
+		}
+	}
+
+	statefulSets, err := clientset.AppsV1().StatefulSets(namespace).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return false, err
+	}
+
+	for _, statefulSet := range statefulSets.Items {
+		statefulSetLabels := labels.Set(statefulSet.Spec.Template.Labels)
+		if labelSelector.Matches(statefulSetLabels) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func validateMatchingWorkloads(clientset kubernetes.Interface, namespace string, selector *metav1.LabelSelector) (bool, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: metav1.FormatLabelSelector(selector),
+	})
+	if err != nil {
+		return false, err
+	}
+	if len(pods.Items) > 0 {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func GetUnusedPdbs(filterOpts *filters.Options, clientset kubernetes.Interface, outputFormat string, opts common.Opts) (string, error) {
+	resources := make(map[string]map[string][]ResourceInfo)
+	for _, namespace := range filterOpts.Namespaces(clientset) {
 		diff, err := processNamespacePdbs(clientset, namespace, filterOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to process namespace %s: %v\n", namespace, err)
 			continue
 		}
-
 		if opts.DeleteFlag {
 			if diff, err = DeleteResource(diff, clientset, namespace, "PDB", opts.NoInteractive); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to delete PDB %s in namespace %s: %v\n", diff, namespace, err)
 			}
 		}
-		output := FormatOutput(namespace, diff, "PDBs")
-		outputBuffer.WriteString(output)
-		outputBuffer.WriteString("\n")
-
-		resourceMap := make(map[string][]string)
-		resourceMap["Pdb"] = diff
-		response[namespace] = resourceMap
+		switch opts.GroupBy {
+		case "namespace":
+			resources[namespace] = make(map[string][]ResourceInfo)
+			resources[namespace]["Pdb"] = diff
+		case "resource":
+			appendResources(resources, "Pdb", namespace, diff)
+		}
 	}
 
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return "", err
+	var outputBuffer bytes.Buffer
+	var jsonResponse []byte
+	switch outputFormat {
+	case "table":
+		outputBuffer = FormatOutput(resources, opts)
+	case "json", "yaml":
+		var err error
+		if jsonResponse, err = json.MarshalIndent(resources, "", "  "); err != nil {
+			return "", err
+		}
 	}
 
 	unusedPdbs, err := unusedResourceFormatter(outputFormat, outputBuffer, opts, jsonResponse)

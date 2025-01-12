@@ -3,12 +3,13 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "kor.serviceAccountName" . }}-read-resources-role
+  labels:
+    {{- include "kor.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["*"]
     resources:
       - pods
       - configmaps
-      - namespaces
       - secrets
       - services
       - serviceaccounts
@@ -16,13 +17,15 @@ rules:
       - statefulsets
       - roles
       - rolebindings
-      - clusterroles
-      - clusterrolebindings
       - horizontalpodautoscalers
       - persistentvolumeclaims
       - ingresses
       - poddisruptionbudgets
       - endpoints
+      - jobs
+      - replicasets
+      - daemonsets
+      - networkpolicies
     verbs:
       - get
       - list
@@ -32,12 +35,13 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ include "kor.serviceAccountName" . }}-read-resources-clusterrole
+  labels:
+    {{- include "kor.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["*"]
     resources:
       - pods
       - configmaps
-      - namespaces
       - secrets
       - services
       - serviceaccounts
@@ -45,13 +49,22 @@ rules:
       - statefulsets
       - roles
       - rolebindings
-      - clusterroles
-      - clusterrolebindings
       - horizontalpodautoscalers
       - persistentvolumeclaims
       - ingresses
       - poddisruptionbudgets
       - endpoints
+      - jobs
+      - replicasets
+      - daemonsets
+      - networkpolicies
+      {{/* cluster-scoped resources */}}
+      - namespaces
+      - clusterroles
+      - clusterrolebindings
+      - persistentvolumes
+      - customresourcedefinitions
+      - storageclasses
     verbs:
       - get
       - list

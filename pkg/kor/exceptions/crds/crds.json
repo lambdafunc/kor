@@ -1,0 +1,384 @@
+{
+  "exceptionCrds": [
+    {
+      "Namespace": "",
+      "ResourceName": "adminpolicybasedexternalroutes.k8s.ovn.org"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "alertingrules.monitoring.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "alertmanagerconfigs.monitoring.coreos.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "alertrelabelconfigs.monitoring.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "allowlistedv2workloads.auto.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "allowlistedworkloads.auto.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "backendconfigs.cloud.google.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "baremetalhosts.metal3.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "bmceventsubscriptions.metal3.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "capacityrequests.internal.autoscaling.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "clusterautoscalers.autoscaling.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "clustercsidrivers.operator.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "clusterpodmonitorings.monitoring.googleapis.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "clusterresourcequotas.quota.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "clusterrules.monitoring.googleapis.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "cninodes.vpcresources.k8s.aws"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "consoleexternalloglinks.console.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "consolelinks.console.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "consolenotifications.console.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "consolesamples.console.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "consoleyamlsamples.console.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "containerruntimeconfigs.machineconfiguration.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "controlplanemachinesets.machine.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "dnsrecords.ingress.operator.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "egressfirewalls.k8s.ovn.org"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "egressips.k8s.ovn.org"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "egressqoses.k8s.ovn.org"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "egressrouters.network.operator.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "egressservices.k8s.ovn.org"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "eniconfigs.crd.k8s.amazonaws.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "etcdsnapshotfiles.k3s.cattle.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "firmwareschemas.metal3.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "frontendconfigs.networking.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "gkenetworkparamsets.networking.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "globalrules.monitoring.googleapis.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "hardwaredata.metal3.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "helmchartconfigs.helm.cattle.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "hostfirmwaresettings.metal3.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "imagecontentpolicies.config.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "imagecontentsourcepolicies.operator.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "imagedigestmirrorsets.config.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "imagetagmirrorsets.config.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "ingressroutes.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "ingressroutetcps.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "ingressroutetcps.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "ingressrouteudps.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "ingressrouteudps.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "installplans.operators.coreos.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "ippools.whereabouts.cni.cncf.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "kubeletconfigs.machineconfiguration.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "machineautoscalers.autoscaling.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "machines.machine.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "machinesets.machine.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "managedcertificates.networking.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "memberships.hub.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "metal3remediations.infrastructure.cluster.x-k8s.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "metal3remediationtemplates.infrastructure.cluster.x-k8s.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "middlewares.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "middlewares.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "middlewaretcps.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "middlewaretcps.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "network-attachment-definitions.k8s.cni.cncf.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "networks.networking.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "operators.operators.coreos.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "overlappingrangeipreservations.whereabouts.cni.cncf.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "performanceprofiles.performance.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "podmonitorings.monitoring.googleapis.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "podmonitors.monitoring.coreos.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "policyendpoints.networking.k8s.aws"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "preprovisioningimages.metal3.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "probes.monitoring.coreos.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "projecthelmchartrepositories.helm.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "provisioningrequests.autoscaling.x-k8s.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "provisionings.metal3.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "rolebindingrestrictions.authorization.openshift.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "rules.monitoring.googleapis.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "securitygrouppolicies.vpcresources.k8s.aws"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "serverstransports.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "serverstransports.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "serverstransporttcps.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "serviceattachments.networking.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "servicenetworkendpointgroups.networking.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "storagestates.migration.k8s.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "subscriptions.operators.coreos.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "thanosrulers.monitoring.coreos.com"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "tlsoptions.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "tlsoptions.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "tlsstores.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "tlsstores.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "traefikservices.traefik.containo.us"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "traefikservices.traefik.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "updateinfos.nodemanagement.gke.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "volumesnapshotclasses.snapshot.storage.k8s.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "volumesnapshotcontents.snapshot.storage.k8s.io"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "volumesnapshots.snapshot.storage.k8s.io"
+    }
+  ]
+}

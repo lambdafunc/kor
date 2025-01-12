@@ -11,6 +11,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 	"k8s.io/utils/strings/slices"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
 func getDeploymentNames(clientset kubernetes.Interface, namespace string) ([]string, error) {
@@ -37,88 +40,79 @@ func getStatefulSetNames(clientset kubernetes.Interface, namespace string) ([]st
 	return names, nil
 }
 
-func extractUnusedHpas(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
+func processNamespaceHpas(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]ResourceInfo, error) {
 	deploymentNames, err := getDeploymentNames(clientset, namespace)
 	if err != nil {
 		return nil, err
 	}
+
 	statefulsetNames, err := getStatefulSetNames(clientset, namespace)
 	if err != nil {
 		return nil, err
 	}
-	hpas, err := clientset.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(context.TODO(), metav1.ListOptions{})
+
+	hpas, err := clientset.AutoscalingV2().HorizontalPodAutoscalers(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
 	if err != nil {
 		return nil, err
 	}
 
-	var diff []string
+	var unusedHpas []ResourceInfo
 	for _, hpa := range hpas.Items {
-		if hpa.Labels["kor/used"] == "true" {
+		if pass, _ := filter.SetObject(&hpa).Run(filterOpts); pass {
 			continue
 		}
 
-		// checks if the resource has any labels that match the excluded selector specified in opts.ExcludeLabels.
-		// If it does, the resource is skipped.
-		if excluded, _ := HasExcludedLabel(hpa.Labels, filterOpts.ExcludeLabels); excluded {
-			continue
-		}
-		// checks if the resource's age (measured from its last modified time) matches the included criteria
-		// specified by the filter options.
-		if included, _ := HasIncludedAge(hpa.CreationTimestamp, filterOpts); !included {
+		if hpa.Labels["kor/used"] == "false" {
+			unusedHpas = append(unusedHpas, ResourceInfo{Name: hpa.Name, Reason: "Marked with unused label"})
 			continue
 		}
 
 		switch hpa.Spec.ScaleTargetRef.Kind {
 		case "Deployment":
 			if !slices.Contains(deploymentNames, hpa.Spec.ScaleTargetRef.Name) {
-				diff = append(diff, hpa.Name)
+				unusedHpas = append(unusedHpas, ResourceInfo{Name: hpa.Name, Reason: "Scale target Deployment does not exist"})
 			}
 		case "StatefulSet":
 			if !slices.Contains(statefulsetNames, hpa.Spec.ScaleTargetRef.Name) {
-				diff = append(diff, hpa.Name)
+				unusedHpas = append(unusedHpas, ResourceInfo{Name: hpa.Name, Reason: "Scale target StatefulSet does not exist"})
 			}
 		}
-	}
-	return diff, nil
-}
-
-func processNamespaceHpas(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
-	unusedHpas, err := extractUnusedHpas(clientset, namespace, filterOpts)
-	if err != nil {
-		return nil, err
 	}
 	return unusedHpas, nil
 }
 
-func GetUnusedHpas(includeExcludeLists IncludeExcludeLists, filterOpts *FilterOptions, clientset kubernetes.Interface, outputFormat string, opts Opts) (string, error) {
-	var outputBuffer bytes.Buffer
-	namespaces := SetNamespaceList(includeExcludeLists, clientset)
-	response := make(map[string]map[string][]string)
-
-	for _, namespace := range namespaces {
+func GetUnusedHpas(filterOpts *filters.Options, clientset kubernetes.Interface, outputFormat string, opts common.Opts) (string, error) {
+	resources := make(map[string]map[string][]ResourceInfo)
+	for _, namespace := range filterOpts.Namespaces(clientset) {
 		diff, err := processNamespaceHpas(clientset, namespace, filterOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to process namespace %s: %v\n", namespace, err)
 			continue
 		}
-
 		if opts.DeleteFlag {
 			if diff, err = DeleteResource(diff, clientset, namespace, "HPA", opts.NoInteractive); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to delete HPA %s in namespace %s: %v\n", diff, namespace, err)
 			}
 		}
-		output := FormatOutput(namespace, diff, "HPAs")
-		outputBuffer.WriteString(output)
-		outputBuffer.WriteString("\n")
-
-		resourceMap := make(map[string][]string)
-		resourceMap["Hpa"] = diff
-		response[namespace] = resourceMap
+		switch opts.GroupBy {
+		case "namespace":
+			resources[namespace] = make(map[string][]ResourceInfo)
+			resources[namespace]["Hpa"] = diff
+		case "resource":
+			appendResources(resources, "Hpa", namespace, diff)
+		}
 	}
 
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return "", err
+	var outputBuffer bytes.Buffer
+	var jsonResponse []byte
+	switch outputFormat {
+	case "table":
+		outputBuffer = FormatOutput(resources, opts)
+	case "json", "yaml":
+		var err error
+		if jsonResponse, err = json.MarshalIndent(resources, "", "  "); err != nil {
+			return "", err
+		}
 	}
 
 	unusedHpas, err := unusedResourceFormatter(outputFormat, outputBuffer, opts, jsonResponse)

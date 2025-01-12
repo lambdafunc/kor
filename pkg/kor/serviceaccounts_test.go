@@ -12,6 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
 func createTestServiceAccounts(t *testing.T) *fake.Clientset {
@@ -26,14 +29,26 @@ func createTestServiceAccounts(t *testing.T) *fake.Clientset {
 		t.Fatalf("Error creating namespace %s: %v", testNamespace, err)
 	}
 
-	sa1 := CreateTestServiceAccount(testNamespace, "test-sa1")
-	sa2 := CreateTestServiceAccount(testNamespace, "test-sa2")
+	sa1 := CreateTestServiceAccount(testNamespace, "test-sa1", AppLabels)
 	_, err = clientset.CoreV1().ServiceAccounts(testNamespace).Create(context.TODO(), sa1, v1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Error creating fake %s: %v", "ServiceAccount", err)
 	}
 
+	sa2 := CreateTestServiceAccount(testNamespace, "test-sa2", AppLabels)
 	_, err = clientset.CoreV1().ServiceAccounts(testNamespace).Create(context.TODO(), sa2, v1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Error creating fake %s: %v", "ServiceAccount", err)
+	}
+
+	sa3 := CreateTestServiceAccount(testNamespace, "test-sa3", UsedLabels)
+	_, err = clientset.CoreV1().ServiceAccounts(testNamespace).Create(context.TODO(), sa3, v1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Error creating fake %s: %v", "ServiceAccount", err)
+	}
+
+	sa4 := CreateTestServiceAccount(testNamespace, "test-sa4", UnusedLabels)
+	_, err = clientset.CoreV1().ServiceAccounts(testNamespace).Create(context.TODO(), sa4, v1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Error creating fake %s: %v", "ServiceAccount", err)
 	}
@@ -95,7 +110,7 @@ func TestRetrieveUsedSA(t *testing.T) {
 	testVolume := CreateTestVolume("test-volume1", "test-pvc")
 	volumeList = append(volumeList, *testVolume)
 
-	podWithSA := CreateTestPod(testNamespace, "test-pod1", "test-sa1", volumeList)
+	podWithSA := CreateTestPod(testNamespace, "test-pod1", "test-sa1", volumeList, AppLabels)
 	_, err := clientset.CoreV1().Pods(testNamespace).Create(context.TODO(), podWithSA, v1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Error creating fake %s: %v", "Pod", err)
@@ -105,19 +120,19 @@ func TestRetrieveUsedSA(t *testing.T) {
 		t.Errorf("Expected no error, got %v", err)
 	}
 
-	if len(serviceAccountUsedByPod) != 2 {
+	if len(serviceAccountUsedByPod) != 1 {
 		t.Errorf("Expected 2 serviceAccount Used by pod, got %d", len(serviceAccountUsedByPod))
 	}
 
-	if serviceAccountUsedByPod[0] != "test-sa1" || serviceAccountUsedByPod[1] != "default" {
-		t.Errorf("Expected 'test-sa1' and 'default', got %s", serviceAccountUsedByPod[0])
+	if serviceAccountUsedByPod[0] != "test-sa1" {
+		t.Errorf("Expected 'test-sa1', got %s", serviceAccountUsedByPod[0])
 	}
 
 }
 
 func TestRetrieveServiceAccountNames(t *testing.T) {
 	clientset := createTestServiceAccounts(t)
-	serviceAccountNames, err := retrieveServiceAccountNames(clientset, testNamespace)
+	serviceAccountNames, _, err := retrieveServiceAccountNames(clientset, testNamespace, &filters.Options{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -141,22 +156,22 @@ func TestProcessNamespaceSA(t *testing.T) {
 		t.Fatalf("Error creating fake %s: %v", "roleBinding", err)
 	}
 
-	podWithSA := CreateTestPod(testNamespace, "test-pod1", "test-sa1", volumeList)
+	podWithSA := CreateTestPod(testNamespace, "test-pod1", "test-sa1", volumeList, AppLabels)
 	_, err = clientset.CoreV1().Pods(testNamespace).Create(context.TODO(), podWithSA, v1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Error creating fake %s: %v", "Pod", err)
 	}
 
-	unusedServiceAccounts, err := processNamespaceSA(clientset, testNamespace)
+	unusedServiceAccounts, err := processNamespaceSA(clientset, testNamespace, &filters.Options{})
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	if len(unusedServiceAccounts) != 1 {
+	if len(unusedServiceAccounts) != 2 {
 		t.Errorf("Expected 2 serviceAccount Used by pod, got %d", len(unusedServiceAccounts))
 	}
 
-	if unusedServiceAccounts[0] != "test-sa2" {
+	if unusedServiceAccounts[0].Name != "test-sa2" {
 		t.Errorf("Expected 'test-sa2', got %s", unusedServiceAccounts[0])
 	}
 }
@@ -170,27 +185,26 @@ func TestGetUnusedServiceAccountsStructured(t *testing.T) {
 		t.Fatalf("Error creating fake %s: %v", "clusterRoleBinding", err)
 	}
 
-	includeExcludeLists := IncludeExcludeLists{
-		IncludeListStr: "",
-		ExcludeListStr: "",
-	}
-
-	opts := Opts{
+	opts := common.Opts{
 		WebhookURL:    "",
 		Channel:       "",
 		Token:         "",
 		DeleteFlag:    false,
 		NoInteractive: true,
+		GroupBy:       "namespace",
 	}
 
-	output, err := GetUnusedServiceAccounts(includeExcludeLists, clientset, "json", opts)
+	output, err := GetUnusedServiceAccounts(&filters.Options{}, clientset, "json", opts)
 	if err != nil {
 		t.Fatalf("Error calling GetUnusedServiceAccountsStructured: %v", err)
 	}
 
 	expectedOutput := map[string]map[string][]string{
 		testNamespace: {
-			"ServiceAccounts": {"test-sa2"},
+			"ServiceAccount": {
+				"test-sa2",
+				"test-sa4",
+			},
 		},
 	}
 

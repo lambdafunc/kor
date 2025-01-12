@@ -3,6 +3,7 @@ package kor
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,19 +13,45 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
-func processCrds(apiExtClient apiextensionsclientset.Interface, dynamicClient dynamic.Interface) ([]string, error) {
+//go:embed exceptions/crds/crds.json
+var crdsConfig []byte
 
-	var unusedCRDs []string
+func processCrds(apiExtClient apiextensionsclientset.Interface, dynamicClient dynamic.Interface, filterOpts *filters.Options) ([]ResourceInfo, error) {
 
-	crds, err := apiExtClient.ApiextensionsV1().CustomResourceDefinitions().List(context.TODO(), metav1.ListOptions{})
+	var unusedCRDs []ResourceInfo
+
+	crds, err := apiExtClient.ApiextensionsV1().CustomResourceDefinitions().List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := unmarshalConfig(crdsConfig)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, crd := range crds.Items {
-		if crd.Labels["kor/used"] == "true" {
+		if pass, _ := filter.SetObject(&crd).Run(filterOpts); pass {
+			continue
+		}
+
+		if crd.Labels["kor/used"] == "false" {
+			reason := "Marked with unused label"
+			unusedCRDs = append(unusedCRDs, ResourceInfo{Name: crd.Name, Reason: reason})
+			continue
+		}
+
+		exceptionFound, err := isResourceException(crd.Name, crd.Namespace, config.ExceptionCrds)
+		if err != nil {
+			return nil, err
+		}
+
+		if exceptionFound {
 			continue
 		}
 
@@ -33,45 +60,42 @@ func processCrds(apiExtClient apiextensionsclientset.Interface, dynamicClient dy
 			Version:  crd.Spec.Versions[0].Name, // We're checking the first version.
 			Resource: crd.Spec.Names.Plural,
 		}
-		instances, err := dynamicClient.Resource(gvr).Namespace("").List(context.TODO(), metav1.ListOptions{})
+		instances, err := dynamicClient.Resource(gvr).Namespace("").List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
 		if err != nil {
 			return nil, err
 		}
 		if len(instances.Items) == 0 {
-			unusedCRDs = append(unusedCRDs, crd.Name)
+			reason := "CRD has no instances"
+			unusedCRDs = append(unusedCRDs, ResourceInfo{Name: crd.Name, Reason: reason})
 		}
 	}
 	return unusedCRDs, nil
 }
 
-func GetUnusedCrds(apiExtClient apiextensionsclientset.Interface, dynamicClient dynamic.Interface, outputFormat string, opts Opts) (string, error) {
-
-	var outputBuffer bytes.Buffer
-	diff, err := processCrds(apiExtClient, dynamicClient)
-
-	response := make(map[string]map[string][]string)
-
+func GetUnusedCrds(_ *filters.Options, apiExtClient apiextensionsclientset.Interface, dynamicClient dynamic.Interface, outputFormat string, opts common.Opts) (string, error) {
+	resources := make(map[string]map[string][]ResourceInfo)
+	diff, err := processCrds(apiExtClient, dynamicClient, &filters.Options{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to process crds: %v\n", err)
 	}
-	if len(diff) > 0 {
-		// We consider cluster scope resources in "" (empty string) namespace, as it is common in k8s
-		if response[""] == nil {
-			response[""] = make(map[string][]string)
-		}
-		response[""]["Crd"] = diff
+	switch opts.GroupBy {
+	case "namespace":
+		resources[""] = make(map[string][]ResourceInfo)
+		resources[""]["Crd"] = diff
+	case "resource":
+		appendResources(resources, "Crd", "", diff)
 	}
-	output := FormatOutput("", diff, "Crds")
 
-	outputBuffer.WriteString(output)
-	outputBuffer.WriteString("\n")
-
-	resourceMap := make(map[string][]string)
-	resourceMap["Crd"] = diff
-
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return "", err
+	var outputBuffer bytes.Buffer
+	var jsonResponse []byte
+	switch outputFormat {
+	case "table":
+		outputBuffer = FormatOutput(resources, opts)
+	case "json", "yaml":
+		var err error
+		if jsonResponse, err = json.MarshalIndent(resources, "", "  "); err != nil {
+			return "", err
+		}
 	}
 
 	unusedCRDs, err := unusedResourceFormatter(outputFormat, outputBuffer, opts, jsonResponse)

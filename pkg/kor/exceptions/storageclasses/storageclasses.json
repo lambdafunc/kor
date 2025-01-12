@@ -1,0 +1,56 @@
+{
+  "exceptionStorageClasses": [
+    {
+      "Namespace": "",
+      "ResourceName": "azurefile"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "azurefile-csi"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "azurefile-csi-premium"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "default"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "gp2"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "local-path"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "managed"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "managed-csi"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "managed-csi-premium"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "managed-premium"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "premium-rwo"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "standard"
+    },
+    {
+      "Namespace": "",
+      "ResourceName": "standard-rwo"
+    }
+  ]
+}

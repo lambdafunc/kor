@@ -10,9 +10,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
-func retreiveUsedPvcs(clientset kubernetes.Interface, namespace string) ([]string, error) {
+func retrieveUsedPvcs(clientset kubernetes.Interface, namespace string) ([]string, error) {
 	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		fmt.Printf("Failed to list Pods: %v\n", err)
@@ -30,69 +33,78 @@ func retreiveUsedPvcs(clientset kubernetes.Interface, namespace string) ([]strin
 	return usedPvcs, err
 }
 
-func processNamespacePvcs(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
-	pvcs, err := clientset.CoreV1().PersistentVolumeClaims(namespace).List(context.TODO(), metav1.ListOptions{})
+func processNamespacePvcs(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]ResourceInfo, error) {
+	pvcs, err := clientset.CoreV1().PersistentVolumeClaims(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
 	if err != nil {
 		return nil, err
 	}
+
+	var unusedPvcNames []string
 	pvcNames := make([]string, 0, len(pvcs.Items))
 	for _, pvc := range pvcs.Items {
-		if pvc.Labels["kor/used"] == "true" {
+		if pass, _ := filter.SetObject(&pvc).Run(filterOpts); pass {
 			continue
 		}
 
-		// checks if the resource has any labels that match the excluded selector specified in opts.ExcludeLabels.
-		// If it does, the resource is skipped.
-		if excluded, _ := HasExcludedLabel(pvc.Labels, filterOpts.ExcludeLabels); excluded {
-			continue
-		}
-		// checks if the resource's age (measured from its last modified time) matches the included criteria
-		// specified by the filter options.
-		if included, _ := HasIncludedAge(pvc.CreationTimestamp, filterOpts); !included {
+		if pvc.Labels["kor/used"] == "false" {
+			unusedPvcNames = append(unusedPvcNames, pvc.Name)
 			continue
 		}
 
 		pvcNames = append(pvcNames, pvc.Name)
 	}
 
-	usedPvcs, err := retreiveUsedPvcs(clientset, namespace)
+	usedPvcs, err := retrieveUsedPvcs(clientset, namespace)
 	if err != nil {
 		return nil, err
 	}
 
-	diff := CalculateResourceDifference(usedPvcs, pvcNames)
+	var diff []ResourceInfo
+	for _, name := range CalculateResourceDifference(usedPvcs, pvcNames) {
+		reason := "PVC is not in use"
+		diff = append(diff, ResourceInfo{Name: name, Reason: reason})
+	}
+
+	for _, name := range unusedPvcNames {
+		reason := "Marked with unused label"
+		diff = append(diff, ResourceInfo{Name: name, Reason: reason})
+	}
+
 	return diff, nil
 }
 
-func GetUnusedPvcs(includeExcludeLists IncludeExcludeLists, filterOpts *FilterOptions, clientset kubernetes.Interface, outputFormat string, opts Opts) (string, error) {
-	var outputBuffer bytes.Buffer
-	namespaces := SetNamespaceList(includeExcludeLists, clientset)
-	response := make(map[string]map[string][]string)
-
-	for _, namespace := range namespaces {
+func GetUnusedPvcs(filterOpts *filters.Options, clientset kubernetes.Interface, outputFormat string, opts common.Opts) (string, error) {
+	resources := make(map[string]map[string][]ResourceInfo)
+	for _, namespace := range filterOpts.Namespaces(clientset) {
 		diff, err := processNamespacePvcs(clientset, namespace, filterOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to process namespace %s: %v\n", namespace, err)
 			continue
 		}
-
 		if opts.DeleteFlag {
 			if diff, err = DeleteResource(diff, clientset, namespace, "PVC", opts.NoInteractive); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to delete PVC %s in namespace %s: %v\n", diff, namespace, err)
 			}
 		}
-		output := FormatOutput(namespace, diff, "PVCs")
-		outputBuffer.WriteString(output)
-		outputBuffer.WriteString("\n")
-
-		resourceMap := make(map[string][]string)
-		resourceMap["Pvc"] = diff
-		response[namespace] = resourceMap
+		switch opts.GroupBy {
+		case "namespace":
+			resources[namespace] = make(map[string][]ResourceInfo)
+			resources[namespace]["Pvc"] = diff
+		case "resource":
+			appendResources(resources, "Pvc", namespace, diff)
+		}
 	}
 
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return "", err
+	var outputBuffer bytes.Buffer
+	var jsonResponse []byte
+	switch outputFormat {
+	case "table":
+		outputBuffer = FormatOutput(resources, opts)
+	case "json", "yaml":
+		var err error
+		if jsonResponse, err = json.MarshalIndent(resources, "", "  "); err != nil {
+			return "", err
+		}
 	}
 
 	unusedPvcs, err := unusedResourceFormatter(outputFormat, outputBuffer, opts, jsonResponse)

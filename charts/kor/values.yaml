@@ -5,8 +5,11 @@ cronJob:
   image:
     repository: yonahdissen/kor
     tag: latest
-  # e.g. kor configmap --include-namespace default,other-ns
-  command: kor all
+  # e.g. kor configmap --include-namespaces default,other-ns
+  command:
+    - kor
+  args:
+    - all
   slackWebhookUrl: ""
   slackChannel: ""
   slackAuthToken: ""
@@ -19,11 +22,14 @@ prometheusExporter:
   name: kor-exporter
   # time in minutes, default is 10 minutes
   exporterInterval: ""
+  command:
+    - kor
+  args:
+    - exporter
   deployment:
     image:
       repository: yonahdissen/kor
       tag: latest
-    command: kor exporter
     restartPolicy: Always
     imagePullPolicy: Always
     imagePullSecrets: []
@@ -55,25 +61,28 @@ prometheusExporter:
 
   serviceMonitor:
     enabled: true
-    # Set the namespace the ServiceMonitor should be deployed, if empty namespace will be .Release.Namespace
+    # -- Set the namespace the ServiceMonitor should be deployed, if empty namespace will be `.Release.Namespace`
     namespace: ""
-    # Service monitor labels
+    # -- Service monitor labels
     labels: {}
-    # Set how frequently Prometheus should scrape
+    # -- Set how frequently Prometheus should scrape
     interval: 30s
     telemetryPath: /metrics
-    # Set timeout for scrape
+    # -- Set timeout for scrape
     timeout: 10s
     relabelings: []
-    # Set of labels to transfer on the Kubernetes Service onto the target.
+    # -- Set of labels to transfer on the Kubernetes Service onto the target.
     targetLabels: []
     metricRelabelings: []
 
+# -- Custom labels to add into metadata
+additionalLabels: {}
+
 serviceAccount:
-  # Specifies whether a service account should be created
+  # -- Specifies whether a service account should be created
   create: true
-  # Annotations to add to the service account
+  # -- Annotations to add to the service account
   annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
+  # -- The name of the service account to use.
+  # -- If not set and create is true, a name is generated using the fullname template
   name: ""

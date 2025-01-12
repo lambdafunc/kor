@@ -9,37 +9,39 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.20.2
-
-      - name: Install goreleaser
-        run: go install github.com/goreleaser/goreleaser@latest
+          go-version-file: "go.mod"
 
       - name: Run goreleaser
-        run: |
-          goreleaser release
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          version: latest
+          args: release --clean
         env:
-          GITHUB_TOKEN: "${{ secrets.RELEASE_GITHUB_TOKEN }}"
+          GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-          
+
       - name: Extract metadata for the Docker image
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/kor
-  
+
       - name: Build and push the Docker image
         uses: docker/build-push-action@v5
         with:
@@ -47,4 +49,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          
+          platforms: linux/amd64,linux/arm64
+
+      - name: Update new version in krew-index
+        uses: rajatjindal/krew-release-bot@v0.0.46
+

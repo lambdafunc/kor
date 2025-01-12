@@ -12,6 +12,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
 func createTestPvcs(t *testing.T) *fake.Clientset {
@@ -26,21 +29,33 @@ func createTestPvcs(t *testing.T) *fake.Clientset {
 		t.Fatalf("Error creating namespace %s: %v", testNamespace, err)
 	}
 
-	pvc1 := CreateTestPvc(testNamespace, "test-pvc1")
-	pvc2 := CreateTestPvc(testNamespace, "test-pvc2")
+	pvc1 := CreateTestPvc(testNamespace, "test-pvc1", AppLabels, "test-sc1")
 	_, err = clientset.CoreV1().PersistentVolumeClaims(testNamespace).Create(context.TODO(), pvc1, v1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Error creating fake %s: %v", "Pvc", err)
 	}
 
+	pvc2 := CreateTestPvc(testNamespace, "test-pvc2", AppLabels, "test-sc1")
 	_, err = clientset.CoreV1().PersistentVolumeClaims(testNamespace).Create(context.TODO(), pvc2, v1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Error creating fake %s: %v", "Pvc", err)
+	}
+
+	pvc3 := CreateTestPvc(testNamespace, "test-pvc3", UsedLabels, "test-sc1")
+	_, err = clientset.CoreV1().PersistentVolumeClaims(testNamespace).Create(context.TODO(), pvc3, v1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("Error creating fake %s: %v", "Pvc", err)
+	}
+
+	pvc4 := CreateTestPvc(testNamespace, "test-pvc4", UnusedLabels, "test-sc1")
+	_, err = clientset.CoreV1().PersistentVolumeClaims(testNamespace).Create(context.TODO(), pvc4, v1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("Error creating fake %s: %v", "Pvc", err)
 	}
 
 	testVolume := CreateTestVolume("test-volume", "test-pvc1")
 	volumeList = append(volumeList, *testVolume)
-	testPod := CreateTestPod(testNamespace, "test-pod", "test-sa", volumeList)
+	testPod := CreateTestPod(testNamespace, "test-pod", "test-sa", volumeList, AppLabels)
 
 	_, err = clientset.CoreV1().Pods(testNamespace).Create(context.TODO(), testPod, v1.CreateOptions{})
 	if err != nil {
@@ -50,9 +65,9 @@ func createTestPvcs(t *testing.T) *fake.Clientset {
 	return clientset
 }
 
-func TestRetreiveUsedPvcs(t *testing.T) {
+func TestRetrieveUsedPvcs(t *testing.T) {
 	clientset := createTestPvcs(t)
-	usedPvcs, err := retreiveUsedPvcs(clientset, testNamespace)
+	usedPvcs, err := retrieveUsedPvcs(clientset, testNamespace)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
@@ -68,16 +83,16 @@ func TestRetreiveUsedPvcs(t *testing.T) {
 
 func TestProcessNamespacePvcs(t *testing.T) {
 	clientset := createTestPvcs(t)
-	usedPvcs, err := processNamespacePvcs(clientset, testNamespace, &FilterOptions{})
+	usedPvcs, err := processNamespacePvcs(clientset, testNamespace, &filters.Options{})
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
 
-	if len(usedPvcs) != 1 {
-		t.Errorf("Expected 1 unused pvc, got %d", len(usedPvcs))
+	if len(usedPvcs) != 2 {
+		t.Errorf("Expected 2 unused pvc, got %d", len(usedPvcs))
 	}
 
-	if usedPvcs[0] != "test-pvc2" {
+	if usedPvcs[0].Name != "test-pvc2" {
 		t.Errorf("Expected 'test-pvc2', got %s", usedPvcs[0])
 	}
 }
@@ -85,27 +100,26 @@ func TestProcessNamespacePvcs(t *testing.T) {
 func TestGetUnusedPvcsStructured(t *testing.T) {
 	clientset := createTestPvcs(t)
 
-	includeExcludeLists := IncludeExcludeLists{
-		IncludeListStr: "",
-		ExcludeListStr: "",
-	}
-
-	opts := Opts{
+	opts := common.Opts{
 		WebhookURL:    "",
 		Channel:       "",
 		Token:         "",
 		DeleteFlag:    false,
 		NoInteractive: true,
+		GroupBy:       "namespace",
 	}
 
-	output, err := GetUnusedPvcs(includeExcludeLists, &FilterOptions{}, clientset, "json", opts)
+	output, err := GetUnusedPvcs(&filters.Options{}, clientset, "json", opts)
 	if err != nil {
 		t.Fatalf("Error calling GetUnusedPvcsStructured: %v", err)
 	}
 
 	expectedOutput := map[string]map[string][]string{
 		testNamespace: {
-			"Pvc": {"test-pvc2"},
+			"Pvc": {
+				"test-pvc2",
+				"test-pvc4",
+			},
 		},
 	}
 

@@ -1,0 +1,25 @@
+{
+  "exceptionServices": [
+    {
+      "Namespace": "kube-system",
+      "ResourceName": "docker.io-hostpath"
+    },
+    {
+      "Namespace": "kube-system",
+      "ResourceName": "k8s.io-minikube-hostpath"
+    },
+    {
+      "Namespace": "kube-system",
+      "ResourceName": "kube-dns"
+    },
+    {
+      "Namespace": "kube-system",
+      "ResourceName": "vpa-recommender"
+    },
+    {
+      "Namespace": "openshift-.*",
+      "ResourceName": ".*",
+      "MatchRegex": true
+    }
+  ]
+}

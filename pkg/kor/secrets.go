@@ -3,6 +3,7 @@ package kor
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,13 +12,20 @@ import (
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/oidc"
 	"k8s.io/utils/strings/slices"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
 var exceptionSecretTypes = []string{
 	`helm.sh/release.v1`,
 	`kubernetes.io/dockerconfigjson`,
+	`kubernetes.io/dockercfg`,
 	`kubernetes.io/service-account-token`,
 }
+
+//go:embed exceptions/secrets/secrets.json
+var secretsConfig []byte
 
 func retrieveIngressTLS(clientset kubernetes.Interface, namespace string) ([]string, error) {
 	secretNames := make([]string, 0)
@@ -37,7 +45,7 @@ func retrieveIngressTLS(clientset kubernetes.Interface, namespace string) ([]str
 
 }
 
-func retrieveUsedSecret(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, []string, []string, []string, []string, []string, error) {
+func retrieveUsedSecret(clientset kubernetes.Interface, namespace string) ([]string, []string, []string, []string, []string, []string, error) {
 	var envSecrets []string
 	var envSecrets2 []string
 	var volumeSecrets []string
@@ -71,13 +79,26 @@ func retrieveUsedSecret(clientset kubernetes.Interface, namespace string, filter
 					initContainerEnvSecrets = append(initContainerEnvSecrets, env.ValueFrom.SecretKeyRef.Name)
 				}
 			}
+			for _, envFrom := range initContainer.EnvFrom {
+				if envFrom.SecretRef != nil {
+					initContainerEnvSecrets = append(initContainerEnvSecrets, envFrom.SecretRef.Name)
+				}
+			}
 		}
 
 		for _, volume := range pod.Spec.Volumes {
 			if volume.Secret != nil {
 				volumeSecrets = append(volumeSecrets, volume.Secret.SecretName)
 			}
+			if volume.Projected != nil && volume.Projected.Sources != nil {
+				for _, projectedResource := range volume.Projected.Sources {
+					if projectedResource.Secret != nil {
+						volumeSecrets = append(volumeSecrets, projectedResource.Secret.Name)
+					}
+				}
+			}
 		}
+
 		if pod.Spec.ImagePullSecrets != nil {
 			for _, secret := range pod.Spec.ImagePullSecrets {
 				pullSecrets = append(pullSecrets, secret.Name)
@@ -93,37 +114,47 @@ func retrieveUsedSecret(clientset kubernetes.Interface, namespace string, filter
 	return envSecrets, envSecrets2, volumeSecrets, initContainerEnvSecrets, pullSecrets, tlsSecrets, nil
 }
 
-func retrieveSecretNames(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
-	secrets, err := clientset.CoreV1().Secrets(namespace).List(context.TODO(), metav1.ListOptions{})
+func retrieveSecretNames(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]string, []string, error) {
+	secrets, err := clientset.CoreV1().Secrets(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
+	config, err := unmarshalConfig(secretsConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var unusedSecretNames []string
 	names := make([]string, 0, len(secrets.Items))
 	for _, secret := range secrets.Items {
-		if secret.Labels["kor/used"] == "true" {
+		if pass, _ := filter.SetObject(&secret).Run(filterOpts); pass {
 			continue
 		}
 
-		// checks if the resource has any labels that match the excluded selector specified in opts.ExcludeLabels.
-		// If it does, the resource is skipped.
-		if excluded, _ := HasExcludedLabel(secret.Labels, filterOpts.ExcludeLabels); excluded {
-			continue
-		}
-		// checks if the resource's age (measured from its last modified time) matches the included criteria
-		// specified by the filter options.
-		if included, _ := HasIncludedAge(secret.CreationTimestamp, filterOpts); !included {
+		if secret.Labels["kor/used"] == "false" {
+			unusedSecretNames = append(unusedSecretNames, secret.Name)
 			continue
 		}
 
-		if !slices.Contains(exceptionSecretTypes, string(secret.Type)) {
+		exceptionFound, err := isResourceException(secret.Name, secret.Namespace, config.ExceptionSecrets)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if exceptionFound {
+			continue
+		}
+
+		if !slices.Contains(exceptionSecretTypes, string(secret.Type)) && !exceptionFound {
 			names = append(names, secret.Name)
 		}
 	}
-	return names, nil
+	return names, unusedSecretNames, nil
 }
 
-func processNamespaceSecret(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
-	envSecrets, envSecrets2, volumeSecrets, initContainerEnvSecrets, pullSecrets, tlsSecrets, err := retrieveUsedSecret(clientset, namespace, filterOpts)
+func processNamespaceSecret(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]ResourceInfo, error) {
+	envSecrets, envSecrets2, volumeSecrets, initContainerEnvSecrets, pullSecrets, tlsSecrets, err := retrieveUsedSecret(clientset, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -135,51 +166,73 @@ func processNamespaceSecret(clientset kubernetes.Interface, namespace string, fi
 	pullSecrets = RemoveDuplicatesAndSort(pullSecrets)
 	tlsSecrets = RemoveDuplicatesAndSort(tlsSecrets)
 
-	secretNames, err := retrieveSecretNames(clientset, namespace, filterOpts)
+	secretNames, unusedSecretNames, err := retrieveSecretNames(clientset, namespace, filterOpts)
 	if err != nil {
 		return nil, err
 	}
 
 	var usedSecrets []string
-	slicesToAppend := [][]string{envSecrets, envSecrets2, volumeSecrets, pullSecrets, tlsSecrets, initContainerEnvSecrets}
+	slicesToAppend := [][]string{
+		envSecrets,
+		envSecrets2,
+		volumeSecrets,
+		pullSecrets,
+		tlsSecrets,
+		initContainerEnvSecrets,
+	}
 
 	for _, slice := range slicesToAppend {
 		usedSecrets = append(usedSecrets, slice...)
 	}
-	diff := CalculateResourceDifference(usedSecrets, secretNames)
+
+	var diff []ResourceInfo
+
+	for _, name := range CalculateResourceDifference(usedSecrets, secretNames) {
+		reason := "Secret is not used in any pod, container, or ingress"
+		diff = append(diff, ResourceInfo{Name: name, Reason: reason})
+	}
+
+	for _, name := range unusedSecretNames {
+		reason := "Marked with unused label"
+		diff = append(diff, ResourceInfo{Name: name, Reason: reason})
+	}
+
 	return diff, nil
 
 }
 
-func GetUnusedSecrets(includeExcludeLists IncludeExcludeLists, filterOpts *FilterOptions, clientset kubernetes.Interface, outputFormat string, opts Opts) (string, error) {
-	var outputBuffer bytes.Buffer
-	namespaces := SetNamespaceList(includeExcludeLists, clientset)
-	response := make(map[string]map[string][]string)
-
-	for _, namespace := range namespaces {
+func GetUnusedSecrets(filterOpts *filters.Options, clientset kubernetes.Interface, outputFormat string, opts common.Opts) (string, error) {
+	resources := make(map[string]map[string][]ResourceInfo)
+	for _, namespace := range filterOpts.Namespaces(clientset) {
 		diff, err := processNamespaceSecret(clientset, namespace, filterOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to process namespace %s: %v\n", namespace, err)
 			continue
 		}
-
 		if opts.DeleteFlag {
 			if diff, err = DeleteResource(diff, clientset, namespace, "Secret", opts.NoInteractive); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to delete Secret %s in namespace %s: %v\n", diff, namespace, err)
 			}
 		}
-		output := FormatOutput(namespace, diff, "Secrets")
-		outputBuffer.WriteString(output)
-		outputBuffer.WriteString("\n")
-
-		resourceMap := make(map[string][]string)
-		resourceMap["Secrets"] = diff
-		response[namespace] = resourceMap
+		switch opts.GroupBy {
+		case "namespace":
+			resources[namespace] = make(map[string][]ResourceInfo)
+			resources[namespace]["Secret"] = diff
+		case "resource":
+			appendResources(resources, "Secret", namespace, diff)
+		}
 	}
 
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return "", err
+	var outputBuffer bytes.Buffer
+	var jsonResponse []byte
+	switch outputFormat {
+	case "table":
+		outputBuffer = FormatOutput(resources, opts)
+	case "json", "yaml":
+		var err error
+		if jsonResponse, err = json.MarshalIndent(resources, "", "  "); err != nil {
+			return "", err
+		}
 	}
 
 	unusedSecrets, err := unusedResourceFormatter(outputFormat, outputBuffer, opts, jsonResponse)

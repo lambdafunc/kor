@@ -9,64 +9,77 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/yonahd/kor/pkg/common"
+	"github.com/yonahd/kor/pkg/filters"
 )
 
-func ProcessNamespaceStatefulSets(clientset kubernetes.Interface, namespace string, filterOpts *FilterOptions) ([]string, error) {
-	statefulSetsList, err := clientset.AppsV1().StatefulSets(namespace).List(context.TODO(), metav1.ListOptions{})
+func processNamespaceStatefulSets(clientset kubernetes.Interface, namespace string, filterOpts *filters.Options) ([]ResourceInfo, error) {
+	statefulSetsList, err := clientset.AppsV1().StatefulSets(namespace).List(context.TODO(), metav1.ListOptions{LabelSelector: filterOpts.IncludeLabels})
 	if err != nil {
 		return nil, err
 	}
 
-	var statefulSetsWithoutReplicas []string
+	var statefulSetsWithoutReplicas []ResourceInfo
 
 	for _, statefulSet := range statefulSetsList.Items {
-		// checks if the resource has any labels that match the excluded selector specified in opts.ExcludeLabels.
-		// If it does, the resource is skipped.
-		if excluded, _ := HasExcludedLabel(statefulSet.Labels, filterOpts.ExcludeLabels); excluded {
+		if pass, _ := filter.SetObject(&statefulSet).Run(filterOpts); pass {
 			continue
 		}
-		// checks if the resource's age (measured from its last modified time) matches the included criteria
-		// specified by the filter options.
-		if included, _ := HasIncludedAge(statefulSet.CreationTimestamp, filterOpts); !included {
+
+		status := ResourceInfo{Name: statefulSet.Name}
+
+		if statefulSet.Labels["kor/used"] == "false" {
+			status.Reason = "Marked with unused label"
+			statefulSetsWithoutReplicas = append(statefulSetsWithoutReplicas, status)
 			continue
 		}
 
 		if *statefulSet.Spec.Replicas == 0 {
-			statefulSetsWithoutReplicas = append(statefulSetsWithoutReplicas, statefulSet.Name)
+			status.Reason = "StatefulSet has no replicas"
+			statefulSetsWithoutReplicas = append(statefulSetsWithoutReplicas, status)
 		}
 	}
 
 	return statefulSetsWithoutReplicas, nil
 }
 
-func GetUnusedStatefulSets(includeExcludeLists IncludeExcludeLists, filterOpts *FilterOptions, clientset kubernetes.Interface, outputFormat string, opts Opts) (string, error) {
-	var outputBuffer bytes.Buffer
-	namespaces := SetNamespaceList(includeExcludeLists, clientset)
-	response := make(map[string]map[string][]string)
-
-	for _, namespace := range namespaces {
-		diff, err := ProcessNamespaceStatefulSets(clientset, namespace, filterOpts)
+func GetUnusedStatefulSets(filterOpts *filters.Options, clientset kubernetes.Interface, outputFormat string, opts common.Opts) (string, error) {
+	resources := make(map[string]map[string][]ResourceInfo)
+	for _, namespace := range filterOpts.Namespaces(clientset) {
+		diff, err := processNamespaceStatefulSets(clientset, namespace, filterOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to process namespace %s: %v\n", namespace, err)
 			continue
 		}
 		if opts.DeleteFlag {
-			if diff, err = DeleteResource(diff, clientset, namespace, "Statefulset", opts.NoInteractive); err != nil {
+			if diff, err = DeleteResource(diff, clientset, namespace, "StatefulSet", opts.NoInteractive); err != nil {
 				fmt.Fprintf(os.Stderr, "Failed to delete Statefulset %s in namespace %s: %v\n", diff, namespace, err)
 			}
 		}
-		output := FormatOutput(namespace, diff, "Statefulsets")
-		outputBuffer.WriteString(output)
-		outputBuffer.WriteString("\n")
-
-		resourceMap := make(map[string][]string)
-		resourceMap["Statefulsets"] = diff
-		response[namespace] = resourceMap
+		switch opts.GroupBy {
+		case "namespace":
+			if diff != nil {
+				resources[namespace] = make(map[string][]ResourceInfo)
+				resources[namespace]["StatefulSet"] = diff
+			}
+		case "resource":
+			if diff != nil {
+				appendResources(resources, "StatefulSet", namespace, diff)
+			}
+		}
 	}
 
-	jsonResponse, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return "", err
+	var outputBuffer bytes.Buffer
+	var jsonResponse []byte
+	switch outputFormat {
+	case "table":
+		outputBuffer = FormatOutput(resources, opts)
+	case "json", "yaml":
+		var err error
+		if jsonResponse, err = json.MarshalIndent(resources, "", "  "); err != nil {
+			return "", err
+		}
 	}
 
 	unusedStatefulsets, err := unusedResourceFormatter(outputFormat, outputBuffer, opts, jsonResponse)
